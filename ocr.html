@@ -66,8 +66,8 @@ window.addEventListener('message', async (e) => {
             tessedit_char_whitelist: '0123456789'
         });
 
-        // Prova cada imatge amb 3 modes PSM diferents
-        const psms = ['7', '8', '6'];
+        // Només PSM 7 (single line) i 8 (single word)
+        const psms = ['7', '8'];
         const results = [];
         for (let i = 0; i < images.length; i++) {
             for (const psm of psms) {
