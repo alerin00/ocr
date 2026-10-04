@@ -4,54 +4,106 @@
 <meta charset="utf-8">
 <title>Winvest OCR</title>
 <style>
-  body{margin:0;font-family:sans-serif;background:#0f1729;color:#fff;padding:16px;font-size:14px}
-  h3{margin:0 0 10px;color:#10b77f}
-  #log{font-family:monospace;font-size:12px;color:#cbd5e1;white-space:pre-wrap;
-       max-height:320px;overflow:auto;background:#0a1220;padding:10px;
+  body{margin:0;font-family:sans-serif;background:#0f1729;color:#fff;padding:14px;font-size:13px}
+  h3{margin:0 0 8px;color:#10b77f;font-size:16px}
+  #log{font-family:monospace;font-size:11px;color:#cbd5e1;white-space:pre-wrap;
+       max-height:320px;overflow:auto;background:#0a1220;padding:8px;
        border-radius:6px;border:1px solid #1e2a44}
-  .ok{color:#4ade80}.err{color:#f87171}
+  .ok{color:#4ade80}.err{color:#f87171}.best{color:#fbbf24;font-weight:bold}
+  #previews{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+  #previews img{border:1px solid #1e2a44;border-radius:4px;background:#fff;height:40px;image-rendering:pixelated}
 </style>
 </head>
 <body>
 <h3>Winvest · Resolent captcha</h3>
+<div id="previews"></div>
 <div id="log">Esperant la imatge…</div>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script>
+const logEl = document.getElementById('log');
 const log = (m, cls) => {
-    const el = document.getElementById('log');
     const div = document.createElement('div');
     if (cls) div.className = cls;
     div.textContent = m;
-    el.appendChild(div);
-    el.scrollTop = el.scrollHeight;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
 };
+
+// Puntuació: com més s'assembla a un captcha típic (4 caràcters alfanumèrics), millor
+function score(s) {
+    if (!s) return -1000;
+    let sc = 0;
+    if (s.length === 4) sc += 1000;
+    else if (s.length === 3 || s.length === 5) sc += 200;
+    else sc -= Math.abs(s.length - 4) * 200;
+    if (/^[A-Za-z0-9]+$/.test(s)) sc += 100;
+    if (new Set(s.toLowerCase()).size === 1 && s.length > 2) sc -= 300;
+    if (/[A-Z]/.test(s) && /[a-z]/.test(s)) sc += 10;
+    if (/[A-Za-z]/.test(s) && /[0-9]/.test(s)) sc += 10;
+    return sc;
+}
+
 window.addEventListener('message', async (e) => {
     if (!e.data || e.data.type !== 'wv-ocr-request') return;
+
+    const images = e.data.images || [e.data.image];
+    const previews = document.getElementById('previews');
+    previews.innerHTML = '';
+    for (const dataUrl of images) {
+        const img = document.createElement('img');
+        img.src = dataUrl;
+        previews.appendChild(img);
+    }
+
     try {
         log('Creant worker Tesseract…');
         const worker = await Tesseract.createWorker('eng', 1, {
             workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
             corePath:   'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/',
             langPath:   'https://tessdata.projectnaptha.com/4.0.0',
-            logger: m => log('[tesseract] ' + m.status +
-                (m.progress !== undefined ? ' ' + Math.round(m.progress*100) + '%' : ''))
+            logger: m => {
+                if (m.status === 'recognizing text') return;
+                log('[tesseract] ' + m.status +
+                    (m.progress !== undefined && m.progress < 1 ? ' ' + Math.round(m.progress*100) + '%' : ''));
+            }
         });
         await worker.setParameters({
             tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ',
-            tessedit_pageseg_mode: '8'
+            tessedit_pageseg_mode: '7',      // single text line
+            tessedit_ocr_engine_mode: '1'    // LSTM
         });
-        log('Reconeixent imatge…');
-        const { data: { text } } = await worker.recognize(e.data.image);
+
+        const results = [];
+        for (let i = 0; i < images.length; i++) {
+            const { data: { text } } = await worker.recognize(images[i]);
+            const cleaned = (text || '').replace(/[^A-Za-z0-9]/g, '');
+            const sc = score(cleaned);
+            results.push({ text, cleaned, score: sc });
+            log(`  variant ${i+1}: "${cleaned}"  (score ${sc})`);
+        }
+
         await worker.terminate();
-        log('Resultat: "' + text + '"', 'ok');
-        if (window.opener) window.opener.postMessage({ type: 'wv-ocr-result', text }, '*');
-        setTimeout(() => window.close(), 400);
+
+        results.sort((a, b) => b.score - a.score);
+        const best = results[0];
+        log('🏆 Millor: "' + best.cleaned + '"', 'best');
+
+        if (window.opener) {
+            window.opener.postMessage({
+                type: 'wv-ocr-result',
+                text: best.text,
+                cleaned: best.cleaned,
+                allResults: results
+            }, '*');
+        }
+        setTimeout(() => window.close(), 2500);
     } catch (err) {
         log('Error: ' + err, 'err');
         if (window.opener) window.opener.postMessage({ type: 'wv-ocr-error', error: String(err) }, '*');
-        setTimeout(() => window.close(), 1500);
+        setTimeout(() => window.close(), 3000);
     }
 });
+
 window.opener && window.opener.postMessage({ type: 'wv-ocr-ready' }, '*');
 </script>
 </body>
