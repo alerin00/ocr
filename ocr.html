@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Winvest OCR</title>
+<style>
+  body{margin:0;font-family:sans-serif;background:#0f1729;color:#fff;padding:16px;font-size:14px}
+  h3{margin:0 0 10px;color:#10b77f}
+  #log{font-family:monospace;font-size:12px;color:#cbd5e1;white-space:pre-wrap;
+       max-height:320px;overflow:auto;background:#0a1220;padding:10px;
+       border-radius:6px;border:1px solid #1e2a44}
+  .ok{color:#4ade80}.err{color:#f87171}
+</style>
+</head>
+<body>
+<h3>Winvest · Resolent captcha</h3>
+<div id="log">Esperant la imatge…</div>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+const log = (m, cls) => {
+    const el = document.getElementById('log');
+    const div = document.createElement('div');
+    if (cls) div.className = cls;
+    div.textContent = m;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+};
+window.addEventListener('message', async (e) => {
+    if (!e.data || e.data.type !== 'wv-ocr-request') return;
+    try {
+        log('Creant worker Tesseract…');
+        const worker = await Tesseract.createWorker('eng', 1, {
+            workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+            corePath:   'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/',
+            langPath:   'https://tessdata.projectnaptha.com/4.0.0',
+            logger: m => log('[tesseract] ' + m.status +
+                (m.progress !== undefined ? ' ' + Math.round(m.progress*100) + '%' : ''))
+        });
+        await worker.setParameters({
+            tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ',
+            tessedit_pageseg_mode: '8'
+        });
+        log('Reconeixent imatge…');
+        const { data: { text } } = await worker.recognize(e.data.image);
+        await worker.terminate();
+        log('Resultat: "' + text + '"', 'ok');
+        if (window.opener) window.opener.postMessage({ type: 'wv-ocr-result', text }, '*');
+        setTimeout(() => window.close(), 400);
+    } catch (err) {
+        log('Error: ' + err, 'err');
+        if (window.opener) window.opener.postMessage({ type: 'wv-ocr-error', error: String(err) }, '*');
+        setTimeout(() => window.close(), 1500);
+    }
+});
+window.opener && window.opener.postMessage({ type: 'wv-ocr-ready' }, '*');
+</script>
+</body>
+</html>
