@@ -11,7 +11,8 @@
        border-radius:6px;border:1px solid #1e2a44}
   .ok{color:#4ade80}.err{color:#f87171}.best{color:#fbbf24;font-weight:bold}
   #previews{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
-  #previews img{border:1px solid #1e2a44;border-radius:4px;background:#fff;height:40px;image-rendering:pixelated}
+  #previews img{border:1px solid #1e2a44;border-radius:4px;background:#fff;
+                height:70px;image-rendering:pixelated}
 </style>
 </head>
 <body>
@@ -29,17 +30,15 @@ const log = (m, cls) => {
     logEl.scrollTop = logEl.scrollHeight;
 };
 
-// Puntuació: com més s'assembla a un captcha típic (4 caràcters alfanumèrics), millor
 function score(s) {
     if (!s) return -1000;
     let sc = 0;
     if (s.length === 4) sc += 1000;
     else if (s.length === 3 || s.length === 5) sc += 200;
     else sc -= Math.abs(s.length - 4) * 200;
-    if (/^[A-Za-z0-9]+$/.test(s)) sc += 100;
-    if (new Set(s.toLowerCase()).size === 1 && s.length > 2) sc -= 300;
-    if (/[A-Z]/.test(s) && /[a-z]/.test(s)) sc += 10;
-    if (/[A-Za-z]/.test(s) && /[0-9]/.test(s)) sc += 10;
+    if (/^[0-9]+$/.test(s)) sc += 500;          // només dígits: molt millor
+    if (/^[0-9]{4}$/.test(s)) sc += 200;        // exactament 4 dígits: ideal
+    if (new Set(s).size === 1 && s.length > 2) sc -= 300;
     return sc;
 }
 
@@ -68,15 +67,14 @@ window.addEventListener('message', async (e) => {
             }
         });
         await worker.setParameters({
-            tessedit_char_whitelist: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ',
-            tessedit_pageseg_mode: '7',      // single text line
-            tessedit_ocr_engine_mode: '1'    // LSTM
+            tessedit_char_whitelist: '0123456789',   // <-- només dígits
+            tessedit_pageseg_mode: '8'               // single word
         });
 
         const results = [];
         for (let i = 0; i < images.length; i++) {
             const { data: { text } } = await worker.recognize(images[i]);
-            const cleaned = (text || '').replace(/[^A-Za-z0-9]/g, '');
+            const cleaned = (text || '').replace(/[^0-9]/g, '');
             const sc = score(cleaned);
             results.push({ text, cleaned, score: sc });
             log(`  variant ${i+1}: "${cleaned}"  (score ${sc})`);
