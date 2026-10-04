@@ -7,7 +7,7 @@
   body{margin:0;font-family:sans-serif;background:#0f1729;color:#fff;padding:14px;font-size:13px}
   h3{margin:0 0 8px;color:#10b77f;font-size:16px}
   #log{font-family:monospace;font-size:11px;color:#cbd5e1;white-space:pre-wrap;
-       max-height:320px;overflow:auto;background:#0a1220;padding:8px;
+       max-height:340px;overflow:auto;background:#0a1220;padding:8px;
        border-radius:6px;border:1px solid #1e2a44}
   .ok{color:#4ade80}.err{color:#f87171}.best{color:#fbbf24;font-weight:bold}
   #previews{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
@@ -32,14 +32,10 @@ const log = (m, cls) => {
 
 function score(s) {
     if (!s) return -1000;
-    let sc = 0;
-    if (s.length === 4) sc += 1000;
-    else if (s.length === 3 || s.length === 5) sc += 200;
-    else sc -= Math.abs(s.length - 4) * 200;
-    if (/^[0-9]+$/.test(s)) sc += 500;          // només dígits: molt millor
-    if (/^[0-9]{4}$/.test(s)) sc += 200;        // exactament 4 dígits: ideal
-    if (new Set(s).size === 1 && s.length > 2) sc -= 300;
-    return sc;
+    if (!/^[0-9]+$/.test(s)) return -1000;
+    if (s.length === 4) return 2000;
+    if (s.length === 3 || s.length === 5) return 100;
+    return -Math.abs(s.length - 4) * 200;
 }
 
 window.addEventListener('message', async (e) => {
@@ -67,24 +63,32 @@ window.addEventListener('message', async (e) => {
             }
         });
         await worker.setParameters({
-            tessedit_char_whitelist: '0123456789',   // <-- només dígits
-            tessedit_pageseg_mode: '8'               // single word
+            tessedit_char_whitelist: '0123456789'
         });
 
+        // Prova cada imatge amb 3 modes PSM diferents
+        const psms = ['7', '8', '6'];
         const results = [];
         for (let i = 0; i < images.length; i++) {
-            const { data: { text } } = await worker.recognize(images[i]);
-            const cleaned = (text || '').replace(/[^0-9]/g, '');
-            const sc = score(cleaned);
-            results.push({ text, cleaned, score: sc });
-            log(`  variant ${i+1}: "${cleaned}"  (score ${sc})`);
+            for (const psm of psms) {
+                try {
+                    await worker.setParameters({ tessedit_pageseg_mode: psm });
+                    const { data: { text } } = await worker.recognize(images[i]);
+                    const cleaned = (text || '').replace(/[^0-9]/g, '');
+                    const sc = score(cleaned);
+                    results.push({ text, cleaned, score: sc, variant: i + 1, psm });
+                    log(`  v${i+1} psm${psm}: "${cleaned}"  (score ${sc})`);
+                } catch (err) {
+                    log(`  v${i+1} psm${psm}: error ${err}`);
+                }
+            }
         }
 
         await worker.terminate();
 
         results.sort((a, b) => b.score - a.score);
         const best = results[0];
-        log('🏆 Millor: "' + best.cleaned + '"', 'best');
+        log('🏆 Millor: "' + best.cleaned + '" (v' + best.variant + ' psm' + best.psm + ')', 'best');
 
         if (window.opener) {
             window.opener.postMessage({
