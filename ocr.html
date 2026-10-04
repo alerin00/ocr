@@ -13,6 +13,126 @@
   #previews{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
   #previews img{border:1px solid #1e2a44;border-radius:4px;background:#fff;
                 height:60px;image-rendering:pixelated}
+</style>
+</head>
+<body>
+<h3>Winvest · Resolent captcha</h3>
+<div id="previews"></div>
+<div id="log">Esperant la imatge…</div>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+const logEl = document.getElementById('log');
+const log = (m, cls) => {
+    const div = document.createElement('div');
+    if (cls) div.className = cls;
+    div.textContent = m;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+};
+
+function score(s) {
+    if (!s) return -2000;
+    if (!/^[0-9]+$/.test(s)) return -2000;
+    if (s.length === 4) return 2000;
+    if (s.length === 3 || s.length === 5) return 100;
+    return -Math.abs(s.length - 4) * 300;
+}
+
+window.addEventListener('message', async (e) => {
+    if (!e.data || e.data.type !== 'wv-ocr-request') return;
+
+    const images = e.data.images || [];
+    const labels = e.data.labels || [];
+
+    const previews = document.getElementById('previews');
+    previews.innerHTML = '';
+    for (let i = 0; i < images.length; i++) {
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center';
+        const img = document.createElement('img');
+        img.src = images[i];
+        const cap = document.createElement('span');
+        cap.textContent = labels[i] || (i+1);
+        cap.style.cssText = 'font-size:10px;color:#64748b;margin-top:2px';
+        wrap.appendChild(img);
+        wrap.appendChild(cap);
+        previews.appendChild(wrap);
+    }
+
+    try {
+        log('Creant worker Tesseract…');
+        const worker = await Tesseract.createWorker('eng', 1, {
+            workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+            corePath:   'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/',
+            langPath:   'https://tessdata.projectnaptha.com/4.0.0',
+            logger: m => {
+                if (m.status === 'recognizing text') return;
+                log('[tesseract] ' + m.status +
+                    (m.progress !== undefined && m.progress < 1 ? ' ' + Math.round(m.progress*100) + '%' : ''));
+            }
+        });
+        await worker.setParameters({
+            tessedit_char_whitelist: '0123456789'
+        });
+
+        // Només PSM 7 i 8 (13 no aporta res)
+        const psms = ['7', '8'];
+        const results = [];
+        for (let i = 0; i < images.length; i++) {
+            for (const psm of psms) {
+                try {
+                    await worker.setParameters({ tessedit_pageseg_mode: psm });
+                    const { data: { text } } = await worker.recognize(images[i]);
+                    const cleaned = (text || '').replace(/[^0-9]/g, '');
+                    const sc = score(cleaned);
+                    results.push({ text, cleaned, score: sc, label: labels[i], psm });
+                    log(`  ${labels[i]} psm${psm}: "${cleaned}" (s=${sc})`);
+                } catch (err) {
+                    log(`  ${labels[i]} psm${psm}: error ${err}`);
+                }
+            }
+        }
+
+        await worker.terminate();
+
+        results.sort((a, b) => b.score - a.score);
+        const best = results[0];
+        log('🏆 Millor: "' + best.cleaned + '" (' + best.label + ' psm' + best.psm + ', s=' + best.score + ')', 'best');
+
+        if (window.opener) {
+            window.opener.postMessage({
+                type: 'wv-ocr-result',
+                text: best.text,
+                cleaned: best.cleaned,
+                allResults: results
+            }, '*');
+        }
+        setTimeout(() => window.close(), 2500);
+    } catch (err) {
+        log('Error: ' + err, 'err');
+        if (window.opener) window.opener.postMessage({ type: 'wv-ocr-error', error: String(err) }, '*');
+        setTimeout(() => window.close(), 3000);
+    }
+});
+
+window.opener && window.opener.postMessage({ type: 'wv-ocr-ready' }, '*');
+</script>
+</body>
+</html><!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Winvest OCR</title>
+<style>
+  body{margin:0;font-family:sans-serif;background:#0f1729;color:#fff;padding:14px;font-size:13px}
+  h3{margin:0 0 8px;color:#10b77f;font-size:16px}
+  #log{font-family:monospace;font-size:11px;color:#cbd5e1;white-space:pre-wrap;
+       max-height:360px;overflow:auto;background:#0a1220;padding:8px;
+       border-radius:6px;border:1px solid #1e2a44}
+  .ok{color:#4ade80}.err{color:#f87171}.best{color:#fbbf24;font-weight:bold}
+  #previews{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+  #previews img{border:1px solid #1e2a44;border-radius:4px;background:#fff;
+                height:60px;image-rendering:pixelated}
   .sep{color:#64748b}
 </style>
 </head>
