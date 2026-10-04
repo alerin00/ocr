@@ -30,14 +30,6 @@ const log = (m, cls) => {
     logEl.scrollTop = logEl.scrollHeight;
 };
 
-function score(s) {
-    if (!s) return -2000;
-    if (!/^[0-9]+$/.test(s)) return -2000;
-    if (s.length === 4) return 2000;
-    if (s.length === 3 || s.length === 5) return 100;
-    return -Math.abs(s.length - 4) * 300;
-}
-
 window.addEventListener('message', async (e) => {
     if (!e.data || e.data.type !== 'wv-ocr-request') return;
 
@@ -71,199 +63,63 @@ window.addEventListener('message', async (e) => {
                     (m.progress !== undefined && m.progress < 1 ? ' ' + Math.round(m.progress*100) + '%' : ''));
             }
         });
-        await worker.setParameters({
-            tessedit_char_whitelist: '0123456789'
-        });
+        await worker.setParameters({ tessedit_char_whitelist: '0123456789' });
 
-        // Només PSM 7 i 8 (13 no aporta res)
         const psms = ['7', '8'];
-        const results = [];
+        const raw = [];
         for (let i = 0; i < images.length; i++) {
             for (const psm of psms) {
                 try {
                     await worker.setParameters({ tessedit_pageseg_mode: psm });
                     const { data: { text } } = await worker.recognize(images[i]);
                     const cleaned = (text || '').replace(/[^0-9]/g, '');
-                    const sc = score(cleaned);
-                    results.push({ text, cleaned, score: sc, label: labels[i], psm });
-                    log(`  ${labels[i]} psm${psm}: "${cleaned}" (s=${sc})`);
+                    raw.push({ text, cleaned, label: labels[i], psm });
+                    log(`  ${labels[i]} psm${psm}: "${cleaned}"`);
                 } catch (err) {
                     log(`  ${labels[i]} psm${psm}: error ${err}`);
                 }
             }
         }
-
         await worker.terminate();
 
-        results.sort((a, b) => b.score - a.score);
-        const best = results[0];
-        log('🏆 Millor: "' + best.cleaned + '" (' + best.label + ' psm' + best.psm + ', s=' + best.score + ')', 'best');
+        // ---- Votació ----
+        // Comptem quantes lectures donen exactament el mateix resultat
+        const counts = {};
+        for (const r of raw) {
+            if (!r.cleaned) continue;
+            counts[r.cleaned] = (counts[r.cleaned] || 0) + 1;
+        }
+        log('Vots:', JSON.stringify(counts));
+
+        // Puntuem cada resultat únic
+        const unics = [];
+        for (const key of Object.keys(counts)) {
+            let sc = 0;
+            const votes = counts[key];
+            // Vots: cada coincidència val molt
+            sc += votes * 500;
+            // Longitud: si és 4, bonus gran
+            if (key.length === 4) sc += 2000;
+            else if (key.length === 3 || key.length === 5) sc -= 500;
+            else sc -= 3000;
+
+            unics.push({
+                cleaned: key,
+                score: sc,
+                votes
+            });
+        }
+        unics.sort((a, b) => b.score - a.score);
+        const best = unics[0] || { cleaned: '', score: -9999, votes: 0 };
+        log(`🏆 Guanyador: "${best.cleaned}" (${best.votes} vots, score ${best.score})`, 'best');
 
         if (window.opener) {
             window.opener.postMessage({
                 type: 'wv-ocr-result',
-                text: best.text,
+                text: best.cleaned,
                 cleaned: best.cleaned,
-                allResults: results
-            }, '*');
-        }
-        setTimeout(() => window.close(), 2500);
-    } catch (err) {
-        log('Error: ' + err, 'err');
-        if (window.opener) window.opener.postMessage({ type: 'wv-ocr-error', error: String(err) }, '*');
-        setTimeout(() => window.close(), 3000);
-    }
-});
-
-window.opener && window.opener.postMessage({ type: 'wv-ocr-ready' }, '*');
-</script>
-</body>
-</html><!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Winvest OCR</title>
-<style>
-  body{margin:0;font-family:sans-serif;background:#0f1729;color:#fff;padding:14px;font-size:13px}
-  h3{margin:0 0 8px;color:#10b77f;font-size:16px}
-  #log{font-family:monospace;font-size:11px;color:#cbd5e1;white-space:pre-wrap;
-       max-height:360px;overflow:auto;background:#0a1220;padding:8px;
-       border-radius:6px;border:1px solid #1e2a44}
-  .ok{color:#4ade80}.err{color:#f87171}.best{color:#fbbf24;font-weight:bold}
-  #previews{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
-  #previews img{border:1px solid #1e2a44;border-radius:4px;background:#fff;
-                height:60px;image-rendering:pixelated}
-  .sep{color:#64748b}
-</style>
-</head>
-<body>
-<h3>Winvest · Resolent captcha</h3>
-<div id="previews"></div>
-<div id="log">Esperant la imatge…</div>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-<script>
-const logEl = document.getElementById('log');
-const log = (m, cls) => {
-    const div = document.createElement('div');
-    if (cls) div.className = cls;
-    div.textContent = m;
-    logEl.appendChild(div);
-    logEl.scrollTop = logEl.scrollHeight;
-};
-
-function score(s) {
-    if (!s) return -2000;
-    if (!/^[0-9]+$/.test(s)) return -2000;
-    if (s.length === 4) return 2000;
-    if (s.length === 3 || s.length === 5) return 100;
-    return -Math.abs(s.length - 4) * 200;
-}
-
-window.addEventListener('message', async (e) => {
-    if (!e.data || e.data.type !== 'wv-ocr-request') return;
-
-    const whole = e.data.whole || [];
-    const digits = e.data.digits || null;
-
-    const previews = document.getElementById('previews');
-    previews.innerHTML = '';
-    const makeLabel = (txt) => {
-        const d = document.createElement('div');
-        d.textContent = txt;
-        d.style.cssText = 'color:#64748b;font-size:10px;width:100%';
-        previews.appendChild(d);
-    };
-    if (digits && digits.length) {
-        makeLabel('Dígits segmentats:');
-        for (const dataUrl of digits) {
-            const img = document.createElement('img');
-            img.src = dataUrl;
-            previews.appendChild(img);
-        }
-    }
-    if (whole.length) {
-        makeLabel('Imatge sencera (fallback):');
-        for (const dataUrl of whole) {
-            const img = document.createElement('img');
-            img.src = dataUrl;
-            previews.appendChild(img);
-        }
-    }
-
-    try {
-        log('Creant worker Tesseract…');
-        const worker = await Tesseract.createWorker('eng', 1, {
-            workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
-            corePath:   'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/',
-            langPath:   'https://tessdata.projectnaptha.com/4.0.0',
-            logger: m => {
-                if (m.status === 'recognizing text') return;
-                log('[tesseract] ' + m.status +
-                    (m.progress !== undefined && m.progress < 1 ? ' ' + Math.round(m.progress*100) + '%' : ''));
-            }
-        });
-        await worker.setParameters({
-            tessedit_char_whitelist: '0123456789'
-        });
-
-        const results = [];
-
-        // === A) OCR per dígit individual (PSM 10) ===
-        if (digits && digits.length >= 3 && digits.length <= 5) {
-            log('Mode: per dígit individual (PSM 10)');
-            await worker.setParameters({ tessedit_pageseg_mode: '10' });
-            let combined = '';
-            for (let i = 0; i < digits.length; i++) {
-                try {
-                    const { data: { text } } = await worker.recognize(digits[i]);
-                    const c = (text || '').replace(/[^0-9]/g, '');
-                    combined += c[0] || '?';
-                    log(`  dígit ${i+1}: "${c}" → "${c[0] || '?'}"`);
-                } catch (err) {
-                    log(`  dígit ${i+1}: error ${err}`);
-                    combined += '?';
-                }
-            }
-            log(`  Combinat: "${combined}"`);
-            if (!combined.includes('?')) {
-                results.push({ text: combined, cleaned: combined, score: score(combined), source: 'digits' });
-            } else {
-                results.push({ text: combined, cleaned: combined, score: -500, source: 'digits' });
-            }
-        }
-
-        // === B) OCR de la imatge sencera (fallback) ===
-        if (whole.length) {
-            log('Mode: imatge sencera (PSM 7/8/13)');
-            const psms = ['7', '8', '13'];
-            for (let i = 0; i < whole.length; i++) {
-                for (const psm of psms) {
-                    try {
-                        await worker.setParameters({ tessedit_pageseg_mode: psm });
-                        const { data: { text } } = await worker.recognize(whole[i]);
-                        const cleaned = (text || '').replace(/[^0-9]/g, '');
-                        const sc = score(cleaned);
-                        results.push({ text, cleaned, score: sc, source: `whole${i+1}p${psm}` });
-                        log(`  whole${i+1} psm${psm}: "${cleaned}" (s=${sc})`);
-                    } catch (err) {
-                        log(`  whole${i+1} psm${psm}: error ${err}`);
-                    }
-                }
-            }
-        }
-
-        await worker.terminate();
-
-        results.sort((a, b) => b.score - a.score);
-        const best = results[0];
-        log('🏆 Millor: "' + best.cleaned + '" (' + best.source + ', score ' + best.score + ')', 'best');
-
-        if (window.opener) {
-            window.opener.postMessage({
-                type: 'wv-ocr-result',
-                text: best.text,
-                cleaned: best.cleaned,
-                allResults: results
+                allResults: raw,
+                votes: counts
             }, '*');
         }
         setTimeout(() => window.close(), 2500);
